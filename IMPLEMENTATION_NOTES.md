@@ -716,3 +716,9 @@ Stats for real tokens only (first 21):
 - ~36 transformer layers × 512 sequence length
 - Encoding time: ~2-3 seconds on M3 Max
 - Memory: ~8 GB for FP32 weights (loaded from safetensors)
+
+---
+
+## Known Issues / TODO
+
+1. **img2img output size**: When using `-i` without specifying `-W` and `-H`, the program defaults to 1024x1024 instead of matching the input image dimensions. Should default to input image size.

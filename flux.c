@@ -631,23 +631,28 @@ flux_image *flux_img2img(flux_ctx *ctx, const char *prompt,
     if (strength < 0) strength = 0;
     if (strength > 1) strength = 1;
 
+    /*
+     * For distilled models like FLUX klein (4-step), we should always use
+     * the full number of steps. The strength controls how much noise is added
+     * to the image, not how many steps are skipped.
+     *
+     * Approach: Use the full schedule, but start the latent at the noise
+     * level corresponding to strength.
+     */
+    int num_steps = p.num_steps;
+    float *schedule = flux_linear_schedule(num_steps);
+
+    /* The noise level to add matches strength */
+    float t_start = strength;
+
+    /* Add noise to match t_start level */
     int latent_size = FLUX_LATENT_CHANNELS * latent_h * latent_w;
     int64_t seed = (p.seed < 0) ? (int64_t)time(NULL) : p.seed;
     flux_rng_seed((uint64_t)seed);
 
     for (int i = 0; i < latent_size; i++) {
         float noise = flux_random_normal();
-        img_latent[i] = (1.0f - strength) * img_latent[i] + strength * noise;
-    }
-
-    /* Adjust number of steps based on strength */
-    int num_steps = (int)(p.num_steps * strength);
-    if (num_steps < 1) num_steps = 1;
-
-    /* Get schedule (starting from strength, not 1.0) */
-    float *schedule = (float *)malloc((num_steps + 1) * sizeof(float));
-    for (int i = 0; i <= num_steps; i++) {
-        schedule[i] = strength * (1.0f - (float)i / num_steps);
+        img_latent[i] = (1.0f - t_start) * img_latent[i] + t_start * noise;
     }
 
     /* Sample */
