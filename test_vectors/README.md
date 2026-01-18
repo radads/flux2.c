@@ -6,36 +6,29 @@ Reference images for verifying that optimizations don't break inference.
 
 Generated with:
 ```bash
-./flux --dir flux-klein-model --embeddings text_embeddings_official.bin --seed 42 --steps 1 --output test_vectors/reference_1step_64x64_seed42.png --height 64 --width 64
+./flux -d flux-klein-model -p "A fluffy orange cat sitting on a windowsill" --seed 42 --steps 1 -o test_vectors/reference_1step_64x64_seed42.png -W 64 -H 64
 ```
 
 Parameters:
-- Model: flux-klein-model (safetensors format)
-- Text embeddings: text_embeddings_official.bin (512 tokens, 7680 dim)
+- Model: flux-klein-model
+- Prompt: "A fluffy orange cat sitting on a windowsill"
 - Seed: 42
 - Steps: 1
-- Size: 64x64 pixels (4x4 latent)
-- Timestep schedule: official Flux2 schedule with mu-based time shift
-
-The text embeddings were generated from the prompt "a cute orange tabby cat sitting on a windowsill, photorealistic" using the official Flux2 text encoder.
+- Size: 64x64 pixels
 
 ## Verification
 
-After any optimization, regenerate the image and compare:
+Run `make test` from the project root, or manually:
 ```bash
-./flux --dir flux-klein-model --embeddings text_embeddings_official.bin --seed 42 --steps 1 --output test_output.png --height 64 --width 64
+./flux -d flux-klein-model -p "A fluffy orange cat sitting on a windowsill" --seed 42 --steps 1 -o /tmp/test_output.png -W 64 -H 64
 
-# Compare (should be identical or very close)
 python3 -c "
 import numpy as np
 from PIL import Image
 ref = np.array(Image.open('test_vectors/reference_1step_64x64_seed42.png'))
-test = np.array(Image.open('test_output.png'))
+test = np.array(Image.open('/tmp/test_output.png'))
 diff = np.abs(ref.astype(float) - test.astype(float))
 print(f'Max diff: {diff.max()}, Mean diff: {diff.mean():.4f}')
-if diff.max() < 2:
-    print('PASS: Images match')
-else:
-    print('FAIL: Images differ significantly')
+print('PASS' if diff.max() < 2 else 'FAIL')
 "
 ```

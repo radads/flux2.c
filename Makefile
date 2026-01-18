@@ -51,7 +51,7 @@ TARGET = flux
 # Library
 LIB = libflux.a
 
-.PHONY: all clean debug lib install info
+.PHONY: all clean debug lib install info test
 
 all: $(TARGET)
 
@@ -77,6 +77,22 @@ endif
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS += -fsanitize=address
 debug: clean $(TARGET)
+
+# Test against reference image
+TEST_PROMPT = "A fluffy orange cat sitting on a windowsill"
+test: $(TARGET)
+	@echo "Running inference test..."
+	@./$(TARGET) -d flux-klein-model -p $(TEST_PROMPT) --seed 42 --steps 1 -o /tmp/flux_test_output.png -W 64 -H 64
+	@python3 -c "\
+import numpy as np; \
+from PIL import Image; \
+ref = np.array(Image.open('test_vectors/reference_1step_64x64_seed42.png')); \
+test = np.array(Image.open('/tmp/flux_test_output.png')); \
+diff = np.abs(ref.astype(float) - test.astype(float)); \
+print(f'Max diff: {diff.max()}, Mean diff: {diff.mean():.4f}'); \
+exit(0 if diff.max() < 2 else 1)"
+	@rm -f /tmp/flux_test_output.png
+	@echo "TEST PASSED"
 
 # Install to /usr/local
 install: $(TARGET) $(LIB)
@@ -121,6 +137,7 @@ help:
 	@echo "FLUX.2 Makefile targets:"
 	@echo "  all       - Build the flux executable (default)"
 	@echo "  lib       - Build static library libflux.a"
+	@echo "  test      - Run inference test against reference image"
 	@echo "  debug     - Build with debug symbols and sanitizers"
 	@echo "  install   - Install to /usr/local"
 	@echo "  clean     - Remove build artifacts"
