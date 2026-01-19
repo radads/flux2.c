@@ -1993,9 +1993,15 @@ void flux_gpu_adaln_norm(flux_gpu_tensor_t out, flux_gpu_tensor_t x,
     @autoreleasepool {
         size_t param_size = (size_t)hidden * sizeof(float);
 
-        /* Get cached buffers for shift/scale parameters */
-        id<MTLBuffer> bufShift = get_cached_weight_buffer(shift, param_size);
-        id<MTLBuffer> bufScale = get_cached_weight_buffer(scale, param_size);
+        /* Allocate new buffers with data - shift/scale are timestep-dependent
+         * and change between denoising steps, so they CANNOT use the weight cache.
+         * ARC will release these after the command buffer completes. */
+        id<MTLBuffer> bufShift = [g_device newBufferWithBytes:shift
+                                                       length:param_size
+                                                      options:MTLResourceStorageModeShared];
+        id<MTLBuffer> bufScale = [g_device newBufferWithBytes:scale
+                                                       length:param_size
+                                                      options:MTLResourceStorageModeShared];
 
         if (!bufShift || !bufScale) return;
 
@@ -2025,6 +2031,7 @@ void flux_gpu_adaln_norm(flux_gpu_tensor_t out, flux_gpu_tensor_t x,
             out->has_pending_work = 0;
             x->has_pending_work = 0;
         }
+        /* ARC will release bufShift and bufScale after command completes */
     }
 }
 
@@ -2250,8 +2257,13 @@ void flux_gpu_gated_add(flux_gpu_tensor_t out, const float *gate,
 
     @autoreleasepool {
         size_t gate_size = (size_t)hidden * sizeof(float);
-        id<MTLBuffer> bufGate = get_cached_weight_buffer(gate, gate_size);
 
+        /* Allocate new buffer with data - gate is timestep-dependent
+         * and changes between denoising steps, so it CANNOT use the weight cache.
+         * ARC will release this after the command buffer completes. */
+        id<MTLBuffer> bufGate = [g_device newBufferWithBytes:gate
+                                                      length:gate_size
+                                                     options:MTLResourceStorageModeShared];
         if (!bufGate) return;
 
         id<MTLCommandBuffer> cmdBuffer = get_tensor_cmd();
@@ -2278,6 +2290,7 @@ void flux_gpu_gated_add(flux_gpu_tensor_t out, const float *gate,
             out->has_pending_work = 0;
             proj->has_pending_work = 0;
         }
+        /* ARC will release bufGate after command completes */
     }
 }
 
