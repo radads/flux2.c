@@ -502,41 +502,44 @@ void flux_conv2d_transpose(float *out, const float *in, const float *weight, con
     int outH = (H - 1) * stride - 2 * padding + kH + output_padding;
     int outW = (W - 1) * stride - 2 * padding + kW + output_padding;
 
-    /* Initialize output with bias */
+    /* Gather-based transposed convolution (parallelizable, no write conflicts)
+     * For each output pixel, gather contributions from input pixels that map to it.
+     * This is the inverse of the scatter-add approach and allows safe parallelization.
+     */
     for (int b = 0; b < batch; b++) {
         for (int oc = 0; oc < out_ch; oc++) {
-            float b_val = (bias != NULL) ? bias[oc] : 0.0f;
+            float bias_val = (bias != NULL) ? bias[oc] : 0.0f;
+
             for (int oh = 0; oh < outH; oh++) {
                 for (int ow = 0; ow < outW; ow++) {
-                    int idx = b * out_ch * outH * outW + oc * outH * outW + oh * outW + ow;
-                    out[idx] = b_val;
-                }
-            }
-        }
-    }
+                    float sum = bias_val;
 
-    /* Scatter-add convolution */
-    for (int b = 0; b < batch; b++) {
-        for (int ic = 0; ic < in_ch; ic++) {
-            for (int ih = 0; ih < H; ih++) {
-                for (int iw = 0; iw < W; iw++) {
-                    float val = in[b * in_ch * H * W + ic * H * W + ih * W + iw];
+                    for (int kh = 0; kh < kH; kh++) {
+                        int num_h = oh + padding - kh;
+                        if (num_h % stride != 0) continue;
+                        int ih = num_h / stride;
+                        if (ih < 0 || ih >= H) continue;
 
-                    for (int oc = 0; oc < out_ch; oc++) {
-                        for (int kh = 0; kh < kH; kh++) {
-                            for (int kw = 0; kw < kW; kw++) {
-                                int oh = ih * stride - padding + kh;
-                                int ow = iw * stride - padding + kw;
+                        for (int kw = 0; kw < kW; kw++) {
+                            int num_w = ow + padding - kw;
+                            if (num_w % stride != 0) continue;
+                            int iw = num_w / stride;
+                            if (iw < 0 || iw >= W) continue;
 
-                                if (oh >= 0 && oh < outH && ow >= 0 && ow < outW) {
-                                    int out_idx = b * out_ch * outH * outW + oc * outH * outW + oh * outW + ow;
-                                    /* weight: [in_ch, out_ch, kH, kW] for transposed */
-                                    int w_idx = ic * out_ch * kH * kW + oc * kH * kW + kh * kW + kw;
-                                    out[out_idx] += val * weight[w_idx];
-                                }
+                            const float *in_ptr = in + b * in_ch * H * W + ih * W + iw;
+                            const float *w_ptr = weight + oc * kH * kW + kh * kW + kw;
+                            int in_step = H * W;
+                            int w_step = out_ch * kH * kW;
+
+                            for (int ic = 0; ic < in_ch; ic++) {
+                                sum += (*in_ptr) * (*w_ptr);
+                                in_ptr += in_step;
+                                w_ptr += w_step;
                             }
                         }
                     }
+
+                    out[b * out_ch * outH * outW + oc * outH * outW + oh * outW + ow] = sum;
                 }
             }
         }
