@@ -2252,6 +2252,12 @@ static float *flux_transformer_forward_bf16(flux_transformer_t *tf,
     flux_gpu_tensor_t txt_shift2 = NULL, txt_scale2 = NULL, txt_gate2 = NULL;
     flux_gpu_tensor_t single_shift = NULL, single_scale = NULL, single_gate = NULL;
     flux_gpu_tensor_t final_shift = NULL, final_scale = NULL;
+    double double_start = 0.0;
+    double single_start = 0.0;
+    double final_start = 0.0;
+    double double_time = 0.0;
+    double single_time = 0.0;
+    double final_time = 0.0;
 
     if (!tf->img_in_weight_bf16 || !tf->txt_in_weight_bf16 ||
         !tf->final_proj_weight_bf16 || !tf->adaln_single_weight ||
@@ -2293,6 +2299,7 @@ static float *flux_transformer_forward_bf16(flux_transformer_t *tf,
     }
 
     /* Precompute modulation parameters */
+    double_start = tf_get_time_ms();
     for (int i = 0; i < hidden; i++) {
         float x = t_emb[i];
         tf->t_emb_silu[i] = x / (1.0f + expf(-x));
@@ -2355,6 +2362,7 @@ static float *flux_transformer_forward_bf16(flux_transformer_t *tf,
             flux_gpu_batch_end();
         }
     }
+    double_time = tf_get_time_ms() - double_start;
 
     /* Concatenate text and image for single blocks */
     concat_hidden = flux_gpu_tensor_alloc_f16((size_t)total_seq * hidden);
@@ -2371,6 +2379,7 @@ static float *flux_transformer_forward_bf16(flux_transformer_t *tf,
     }
 
     /* Single-stream modulation */
+    single_start = tf_get_time_ms();
     int mod_size = hidden * 3;
     int fused_dim = hidden * 3 + mlp_hidden * 2;
     float *mod_params = tf->work2 + total_seq * fused_dim;
@@ -2421,6 +2430,7 @@ static float *flux_transformer_forward_bf16(flux_transformer_t *tf,
             flux_gpu_batch_end();
         }
     }
+    single_time = tf_get_time_ms() - single_start;
 
     /* Slice image portion for final layer */
     img_hidden_final = flux_gpu_tensor_alloc_f16((size_t)img_seq * hidden);
@@ -2437,6 +2447,7 @@ static float *flux_transformer_forward_bf16(flux_transformer_t *tf,
     }
 
     /* Final layer (bf16) */
+    final_start = tf_get_time_ms();
     float *final_mod = tf->double_mod_img;
     flux_linear_nobias(final_mod, tf->t_emb_silu, tf->final_norm_weight, 1, hidden, hidden * 2);
     final_scale = bf16_tensor_from_f32(final_mod, hidden);
@@ -2493,6 +2504,11 @@ static float *flux_transformer_forward_bf16(flux_transformer_t *tf,
             output[c * img_seq + pos] = output_nlc[pos * channels + c];
         }
     }
+    final_time = tf_get_time_ms() - final_start;
+    flux_timing_transformer_double += double_time;
+    flux_timing_transformer_single += single_time;
+    flux_timing_transformer_final += final_time;
+    flux_timing_transformer_total += double_time + single_time + final_time;
     if (flux_substep_callback)
         flux_substep_callback(FLUX_SUBSTEP_FINAL_LAYER, 0, 1);
 
