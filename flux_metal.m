@@ -12,6 +12,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
+#import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
 #include "flux_metal.h"
 #include <stdio.h>
 #include <string.h>
@@ -21,6 +22,38 @@
 static id<MTLDevice> g_device = nil;
 static id<MTLCommandQueue> g_queue = nil;
 static int g_initialized = 0;
+
+/* ========================================================================
+ * MPSGraph Conv2D Cache
+ * ======================================================================== */
+
+#define MAX_CONV_GRAPH_CACHE 64
+
+typedef struct {
+    int batch;
+    int in_ch;
+    int out_ch;
+    int H;
+    int W;
+    int kH;
+    int kW;
+    int stride;
+    int padding;
+    __strong MPSGraph *graph;
+    __strong MPSGraphTensor *inputTensor;
+    __strong MPSGraphTensor *weightTensor;
+    __strong MPSGraphTensor *biasTensor;
+    __strong MPSGraphTensor *outTensor;
+    __strong NSArray<NSNumber *> *inputShape;
+    __strong NSArray<NSNumber *> *weightShape;
+    __strong NSArray<NSNumber *> *biasShape;
+    __strong NSArray<NSNumber *> *outShape;
+} conv2d_graph_cache_t;
+
+static conv2d_graph_cache_t g_conv_graph_cache[MAX_CONV_GRAPH_CACHE];
+static int g_conv_graph_count = 0;
+static int g_conv_graph_next = 0;
+static pthread_mutex_t g_conv_graph_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* ========================================================================
  * Batch Execution State
@@ -773,6 +806,187 @@ void flux_metal_sgemm_bf16(int transpose_a, int transpose_b,
             pool_release_buffer(bufferA);
             pool_release_buffer(bufferC);
         }
+    }
+}
+
+static conv2d_graph_cache_t *get_conv2d_graph_cache(int batch, int in_ch, int out_ch,
+                                                    int H, int W, int kH, int kW,
+                                                    int stride, int padding) {
+    pthread_mutex_lock(&g_conv_graph_mutex);
+    for (int i = 0; i < g_conv_graph_count && i < MAX_CONV_GRAPH_CACHE; i++) {
+        conv2d_graph_cache_t *entry = &g_conv_graph_cache[i];
+        if (entry->batch == batch && entry->in_ch == in_ch && entry->out_ch == out_ch &&
+            entry->H == H && entry->W == W && entry->kH == kH && entry->kW == kW &&
+            entry->stride == stride && entry->padding == padding) {
+            pthread_mutex_unlock(&g_conv_graph_mutex);
+            return entry;
+        }
+    }
+
+    int slot = 0;
+    if (g_conv_graph_count < MAX_CONV_GRAPH_CACHE) {
+        slot = g_conv_graph_count++;
+    } else {
+        slot = g_conv_graph_next++ % MAX_CONV_GRAPH_CACHE;
+    }
+
+    conv2d_graph_cache_t *entry = &g_conv_graph_cache[slot];
+    entry->batch = batch;
+    entry->in_ch = in_ch;
+    entry->out_ch = out_ch;
+    entry->H = H;
+    entry->W = W;
+    entry->kH = kH;
+    entry->kW = kW;
+    entry->stride = stride;
+    entry->padding = padding;
+
+    int outH = (H + 2 * padding - kH) / stride + 1;
+    int outW = (W + 2 * padding - kW) / stride + 1;
+    if (outH <= 0 || outW <= 0) {
+        pthread_mutex_unlock(&g_conv_graph_mutex);
+        return NULL;
+    }
+
+    @autoreleasepool {
+        MPSGraph *graph = [[MPSGraph alloc] init];
+        if (!graph) {
+            pthread_mutex_unlock(&g_conv_graph_mutex);
+            return NULL;
+        }
+
+        NSArray<NSNumber *> *inputShape = @[@(batch), @(in_ch), @(H), @(W)];
+        NSArray<NSNumber *> *weightShape = @[@(out_ch), @(in_ch), @(kH), @(kW)];
+        NSArray<NSNumber *> *biasShape = @[@1, @(out_ch), @1, @1];
+        NSArray<NSNumber *> *outShape = @[@(batch), @(out_ch), @(outH), @(outW)];
+
+        MPSGraphTensor *input = [graph placeholderWithShape:inputShape
+                                                  dataType:MPSDataTypeFloat32
+                                                      name:nil];
+        MPSGraphTensor *weight = [graph placeholderWithShape:weightShape
+                                                   dataType:MPSDataTypeFloat32
+                                                       name:nil];
+        MPSGraphTensor *bias = [graph placeholderWithShape:biasShape
+                                                 dataType:MPSDataTypeFloat32
+                                                     name:nil];
+
+        MPSGraphConvolution2DOpDescriptor *desc =
+            [MPSGraphConvolution2DOpDescriptor descriptorWithStrideInX:(NSUInteger)stride
+                                                             strideInY:(NSUInteger)stride
+                                                       dilationRateInX:1
+                                                       dilationRateInY:1
+                                                                groups:1
+                                                           paddingLeft:(NSUInteger)padding
+                                                          paddingRight:(NSUInteger)padding
+                                                            paddingTop:(NSUInteger)padding
+                                                         paddingBottom:(NSUInteger)padding
+                                                          paddingStyle:MPSGraphPaddingStyleExplicit
+                                                            dataLayout:MPSGraphTensorNamedDataLayoutNCHW
+                                                         weightsLayout:MPSGraphTensorNamedDataLayoutOIHW];
+
+        MPSGraphTensor *conv = [graph convolution2DWithSourceTensor:input
+                                                      weightsTensor:weight
+                                                         descriptor:desc
+                                                               name:nil];
+        MPSGraphTensor *out = [graph additionWithPrimaryTensor:conv
+                                              secondaryTensor:bias
+                                                        name:nil];
+
+        entry->graph = graph;
+        entry->inputTensor = input;
+        entry->weightTensor = weight;
+        entry->biasTensor = bias;
+        entry->outTensor = out;
+        entry->inputShape = inputShape;
+        entry->weightShape = weightShape;
+        entry->biasShape = biasShape;
+        entry->outShape = outShape;
+    }
+
+    pthread_mutex_unlock(&g_conv_graph_mutex);
+    return entry;
+}
+
+int flux_metal_conv2d(float *out, const float *in,
+                      const float *weight, const float *bias,
+                      int batch, int in_ch, int out_ch,
+                      int H, int W, int kH, int kW,
+                      int stride, int padding) {
+    if (!g_initialized || !g_device || !g_queue) return 0;
+    if (!out || !in || !weight || !bias) return 0;
+    if (batch <= 0 || in_ch <= 0 || out_ch <= 0 ||
+        H <= 0 || W <= 0 || kH <= 0 || kW <= 0 || stride <= 0) {
+        return 0;
+    }
+
+    conv2d_graph_cache_t *cache = get_conv2d_graph_cache(batch, in_ch, out_ch,
+                                                         H, W, kH, kW,
+                                                         stride, padding);
+    if (!cache || !cache->graph) return 0;
+
+    int outH = (H + 2 * padding - kH) / stride + 1;
+    int outW = (W + 2 * padding - kW) / stride + 1;
+    if (outH <= 0 || outW <= 0) return 0;
+
+    size_t in_bytes = (size_t)batch * in_ch * H * W * sizeof(float);
+    size_t out_bytes = (size_t)batch * out_ch * outH * outW * sizeof(float);
+    size_t w_bytes = (size_t)out_ch * in_ch * kH * kW * sizeof(float);
+    size_t b_bytes = (size_t)out_ch * sizeof(float);
+
+    @autoreleasepool {
+        id<MTLBuffer> in_buf = [g_device newBufferWithBytesNoCopy:(void *)in
+                                                           length:in_bytes
+                                                          options:MTLResourceStorageModeShared
+                                                      deallocator:nil];
+        id<MTLBuffer> out_buf = [g_device newBufferWithBytesNoCopy:out
+                                                            length:out_bytes
+                                                           options:MTLResourceStorageModeShared
+                                                       deallocator:nil];
+        id<MTLBuffer> w_buf = get_cached_weight_buffer(weight, w_bytes);
+        id<MTLBuffer> b_buf = get_cached_weight_buffer(bias, b_bytes);
+        if (!in_buf || !out_buf || !w_buf || !b_buf) return 0;
+
+        MPSGraphTensorData *in_data =
+            [[MPSGraphTensorData alloc] initWithMTLBuffer:in_buf
+                                                   shape:cache->inputShape
+                                                dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData *w_data =
+            [[MPSGraphTensorData alloc] initWithMTLBuffer:w_buf
+                                                   shape:cache->weightShape
+                                                dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData *b_data =
+            [[MPSGraphTensorData alloc] initWithMTLBuffer:b_buf
+                                                   shape:cache->biasShape
+                                                dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData *out_data =
+            [[MPSGraphTensorData alloc] initWithMTLBuffer:out_buf
+                                                   shape:cache->outShape
+                                                dataType:MPSDataTypeFloat32];
+        if (!in_data || !w_data || !b_data || !out_data) return 0;
+
+        MPSCommandBuffer *mps_cmd = [MPSCommandBuffer commandBufferFromCommandQueue:g_queue];
+        if (!mps_cmd) return 0;
+
+        NSDictionary *feeds = @{
+            cache->inputTensor : in_data,
+            cache->weightTensor : w_data,
+            cache->biasTensor : b_data
+        };
+        NSDictionary *results = @{ cache->outTensor : out_data };
+
+        @try {
+            [cache->graph encodeToCommandBuffer:mps_cmd
+                                          feeds:feeds
+                               targetOperations:nil
+                              resultsDictionary:results
+                            executionDescriptor:nil];
+        } @catch (NSException *exception) {
+            return 0;
+        }
+
+        [mps_cmd commit];
+        [mps_cmd waitUntilCompleted];
+        return 1;
     }
 }
 

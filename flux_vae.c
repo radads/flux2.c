@@ -14,6 +14,9 @@
 #include "flux.h"
 #include "flux_kernels.h"
 #include "flux_safetensors.h"
+#ifdef USE_METAL
+#include "flux_metal.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -119,6 +122,30 @@ void flux_vae_free(flux_vae_t *vae);
  * Helper Functions
  * ======================================================================== */
 
+static void vae_conv2d(float *out, const float *in,
+                       const float *weight, const float *bias,
+                       int batch, int in_ch, int out_ch, int H, int W,
+                       int kH, int kW, int stride, int padding) {
+#ifdef USE_METAL
+    if (!flux_metal_available()) {
+        flux_metal_init();
+    }
+    if (flux_metal_available() &&
+        flux_metal_conv2d(out, in, weight, bias,
+                          batch, in_ch, out_ch, H, W,
+                          kH, kW, stride, padding)) {
+        static int logged = 0;
+        if (!logged) {
+            fprintf(stderr, "[VAE: using MPS conv2d path] ");
+            logged = 1;
+        }
+        return;
+    }
+#endif
+    flux_conv2d(out, in, weight, bias, batch, in_ch, out_ch,
+                H, W, kH, kW, stride, padding);
+}
+
 /* Swish activation in-place */
 static void swish_inplace(float *x, int n) {
     flux_silu(x, n);
@@ -136,7 +163,7 @@ static void resblock_forward(float *out, const float *x,
     /* Shortcut/skip connection */
     if (in_ch != out_ch) {
         /* 1x1 conv for channel adjustment */
-        flux_conv2d(out, x, block->skip_weight, block->skip_bias,
+        vae_conv2d(out, x, block->skip_weight, block->skip_bias,
                     batch, in_ch, out_ch, H, W, 1, 1, 1, 0);
     } else {
         flux_copy(out, x, batch * in_ch * spatial);
@@ -151,7 +178,7 @@ static void resblock_forward(float *out, const float *x,
 
     /* Conv1: in_ch -> out_ch */
     float *conv1_out = work + batch * in_ch * spatial;
-    flux_conv2d(conv1_out, work, block->conv1_weight, block->conv1_bias,
+    vae_conv2d(conv1_out, work, block->conv1_weight, block->conv1_bias,
                 batch, in_ch, out_ch, H, W, 3, 3, 1, 1);
 
     /* GroupNorm + Swish */
@@ -160,7 +187,7 @@ static void resblock_forward(float *out, const float *x,
     swish_inplace(work, batch * out_ch * spatial);
 
     /* Conv2: out_ch -> out_ch */
-    flux_conv2d(conv1_out, work, block->conv2_weight, block->conv2_bias,
+    vae_conv2d(conv1_out, work, block->conv2_weight, block->conv2_bias,
                 batch, out_ch, out_ch, H, W, 3, 3, 1, 1);
 
     /* Add residual */
@@ -185,11 +212,11 @@ static int attnblock_forward(float *out, const float *x,
     float *k = q + batch * ch * spatial;
     float *v = k + batch * ch * spatial;
 
-    flux_conv2d(q, work, block->q_weight, block->q_bias,
+    vae_conv2d(q, work, block->q_weight, block->q_bias,
                 batch, ch, ch, H, W, 1, 1, 1, 0);
-    flux_conv2d(k, work, block->k_weight, block->k_bias,
+    vae_conv2d(k, work, block->k_weight, block->k_bias,
                 batch, ch, ch, H, W, 1, 1, 1, 0);
-    flux_conv2d(v, work, block->v_weight, block->v_bias,
+    vae_conv2d(v, work, block->v_weight, block->v_bias,
                 batch, ch, ch, H, W, 1, 1, 1, 0);
 
     /* Reshape: [B, C, H, W] -> [B, 1, HW, C] for attention */
@@ -254,7 +281,7 @@ static int attnblock_forward(float *out, const float *x,
     free(scores);
 
     /* Project output */
-    flux_conv2d(work, attn_out, block->out_weight, block->out_bias,
+    vae_conv2d(work, attn_out, block->out_weight, block->out_bias,
                 batch, ch, ch, H, W, 1, 1, 1, 0);
 
     /* Add residual */
@@ -284,7 +311,7 @@ float *flux_vae_encode(flux_vae_t *vae, const float *img,
     int cur_h = H, cur_w = W;
 
     /* Conv in: 3 -> 128 */
-    flux_conv2d(x, img, vae->enc_conv_in_weight, vae->enc_conv_in_bias,
+    vae_conv2d(x, img, vae->enc_conv_in_weight, vae->enc_conv_in_bias,
                 batch, 3, vae->base_channels, H, W, 3, 3, 1, 1);
 
     int block_idx = 0;
@@ -307,7 +334,7 @@ float *flux_vae_encode(flux_vae_t *vae, const float *img,
             int new_h = cur_h / 2;
             int new_w = cur_w / 2;
             /* Asymmetric padding: pad right and bottom by 1 */
-            flux_conv2d(work, x, ds->conv_weight, ds->conv_bias,
+            vae_conv2d(work, x, ds->conv_weight, ds->conv_bias,
                         batch, ch_out, ch_out, cur_h, cur_w, 3, 3, 2, 1);
             cur_h = new_h;
             cur_w = new_w;
@@ -335,7 +362,7 @@ float *flux_vae_encode(flux_vae_t *vae, const float *img,
 
     /* Conv out: 512 -> 64 (32 mean + 32 logvar) */
     int z_ch = vae->z_channels * 2;  /* 64 */
-    flux_conv2d(x, work, vae->enc_conv_out_weight, vae->enc_conv_out_bias,
+    vae_conv2d(x, work, vae->enc_conv_out_weight, vae->enc_conv_out_bias,
                 batch, mid_ch, z_ch, cur_h, cur_w, 3, 3, 1, 1);
 
     /* Take mean only (first 32 channels) */
@@ -412,13 +439,13 @@ flux_image *flux_vae_decode(flux_vae_t *vae, const float *latent,
     int cur_h = unpatch_h, cur_w = unpatch_w;
 
     /* Post-quantization conv (1x1): 32 -> 32 */
-    flux_conv2d(work, x, vae->post_quant_conv_weight, vae->post_quant_conv_bias,
+    vae_conv2d(work, x, vae->post_quant_conv_weight, vae->post_quant_conv_bias,
                 batch, vae->z_channels, vae->z_channels, cur_h, cur_w, 1, 1, 1, 0);
     flux_copy(x, work, batch * vae->z_channels * cur_h * cur_w);
 
     /* Conv in: 32 -> 512 */
     int mid_ch = vae->base_channels * ch_mult[3];  /* 512 */
-    flux_conv2d(work, x, vae->dec_conv_in_weight, vae->dec_conv_in_bias,
+    vae_conv2d(work, x, vae->dec_conv_in_weight, vae->dec_conv_in_bias,
                 batch, vae->z_channels, mid_ch, cur_h, cur_w, 3, 3, 1, 1);
     flux_copy(x, work, batch * mid_ch * cur_h * cur_w);
 
@@ -458,7 +485,7 @@ flux_image *flux_vae_decode(flux_vae_t *vae, const float *latent,
             flux_upsample_nearest(work, x, batch, ch_out, cur_h, cur_w, 2, 2);
 
             /* Conv for refinement */
-            flux_conv2d(x, work, us->conv_weight, us->conv_bias,
+            vae_conv2d(x, work, us->conv_weight, us->conv_bias,
                         batch, ch_out, ch_out, new_h, new_w, 3, 3, 1, 1);
 
             cur_h = new_h;
@@ -474,7 +501,7 @@ flux_image *flux_vae_decode(flux_vae_t *vae, const float *latent,
     swish_inplace(work, batch * out_ch * cur_h * cur_w);
 
     /* Conv out: 128 -> 3 */
-    flux_conv2d(x, work, vae->dec_conv_out_weight, vae->dec_conv_out_bias,
+    vae_conv2d(x, work, vae->dec_conv_out_weight, vae->dec_conv_out_bias,
                 batch, out_ch, 3, cur_h, cur_w, 3, 3, 1, 1);
 
     /* Convert to image */

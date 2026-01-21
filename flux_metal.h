@@ -76,6 +76,16 @@ void flux_metal_sgemm_bf16(int transpose_a, int transpose_b,
                            float *C, int ldc);
 
 /*
+ * 2D convolution using MPSGraph (NCHW/OIHW, explicit padding).
+ * Returns 1 on success, 0 on failure.
+ */
+int flux_metal_conv2d(float *out, const float *in,
+                      const float *weight, const float *bias,
+                      int batch, int in_ch, int out_ch,
+                      int H, int W, int kH, int kW,
+                      int stride, int padding);
+
+/*
  * Batch matrix multiplication on GPU.
  * Performs batch_count independent matrix multiplications.
  */
