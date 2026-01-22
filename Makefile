@@ -10,7 +10,7 @@ UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
 # Source files
-SRCS = flux.c flux_kernels.c flux_tokenizer.c flux_vae.c flux_transformer.c flux_sample.c flux_image.c flux_safetensors.c flux_qwen3.c flux_qwen3_tokenizer.c
+SRCS = flux.c flux_kernels.c flux_tokenizer.c flux_vae.c flux_transformer.c flux_sample.c flux_image.c flux_safetensors.c flux_qwen3.c flux_qwen3_tokenizer.c kitty.c
 OBJS = $(SRCS:.c=.o)
 MAIN = main.c
 TARGET = flux
@@ -177,4 +177,5 @@ flux_image.o: flux_image.c flux.h
 flux_safetensors.o: flux_safetensors.c flux_safetensors.h
 flux_qwen3.o: flux_qwen3.c flux_qwen3.h flux_safetensors.h
 flux_qwen3_tokenizer.o: flux_qwen3_tokenizer.c flux_qwen3.h
-main.o: main.c flux.h flux_kernels.h
+kitty.o: kitty.c kitty.h flux.h
+main.o: main.c flux.h flux_kernels.h kitty.h
