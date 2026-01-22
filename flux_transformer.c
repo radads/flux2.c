@@ -3579,6 +3579,8 @@ void flux_transformer_free(flux_transformer_t *tf) {
 
     free(tf->img_in_weight);
     free(tf->txt_in_weight);
+    free(tf->img_in_weight_bf16);
+    free(tf->txt_in_weight_bf16);
     free(tf->time_embed.fc1_weight);
     free(tf->time_embed.fc2_weight);
 
@@ -3590,19 +3592,33 @@ void flux_transformer_free(flux_transformer_t *tf) {
             free(b->img_q_weight);
             free(b->img_k_weight);
             free(b->img_v_weight);
+            free(b->img_q_weight_bf16);
+            free(b->img_k_weight_bf16);
+            free(b->img_v_weight_bf16);
             free(b->img_proj_weight);
+            free(b->img_proj_weight_bf16);
             free(b->img_mlp_gate_weight);
             free(b->img_mlp_up_weight);
             free(b->img_mlp_down_weight);
+            free(b->img_mlp_gate_weight_bf16);
+            free(b->img_mlp_up_weight_bf16);
+            free(b->img_mlp_down_weight_bf16);
             free(b->txt_norm_q_weight);
             free(b->txt_norm_k_weight);
             free(b->txt_q_weight);
             free(b->txt_k_weight);
             free(b->txt_v_weight);
+            free(b->txt_q_weight_bf16);
+            free(b->txt_k_weight_bf16);
+            free(b->txt_v_weight_bf16);
             free(b->txt_proj_weight);
+            free(b->txt_proj_weight_bf16);
             free(b->txt_mlp_gate_weight);
             free(b->txt_mlp_up_weight);
             free(b->txt_mlp_down_weight);
+            free(b->txt_mlp_gate_weight_bf16);
+            free(b->txt_mlp_up_weight_bf16);
+            free(b->txt_mlp_down_weight_bf16);
         }
         free(tf->double_blocks);
     }
@@ -3613,13 +3629,16 @@ void flux_transformer_free(flux_transformer_t *tf) {
             free(b->norm_q_weight);
             free(b->norm_k_weight);
             free(b->qkv_mlp_weight);
+            free(b->qkv_mlp_weight_bf16);
             free(b->proj_mlp_weight);
+            free(b->proj_mlp_weight_bf16);
         }
         free(tf->single_blocks);
     }
 
     free(tf->final_norm_weight);
     free(tf->final_proj_weight);
+    free(tf->final_proj_weight_bf16);
     free(tf->rope_freqs);
     free(tf->img_hidden);
     free(tf->txt_hidden);
@@ -3628,6 +3647,9 @@ void flux_transformer_free(flux_transformer_t *tf) {
     free(tf->adaln_double_img_weight);
     free(tf->adaln_double_txt_weight);
     free(tf->adaln_single_weight);
+    free(tf->adaln_double_img_weight_bf16);
+    free(tf->adaln_double_txt_weight_bf16);
+    free(tf->adaln_single_weight_bf16);
 
     /* Free attention workspace buffers */
     free(tf->attn_q_t);
