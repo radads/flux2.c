@@ -544,7 +544,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    LOG_NORMAL(" %s (%.1fs)\n", output_path, timer_end());
+    LOG_NORMAL(" %s %dx%d (%.1fs)\n", output_path, output->width, output->height, timer_end());
 
     /* Print total time (always, unless quiet) */
     struct timeval final_tv;
