@@ -88,6 +88,24 @@ FLUX.2 uses **in-context conditioning** for image-to-image generation. Unlike tr
 - Good: `"oil painting of a woman with sunglasses, impressionist style"`
 - Less good: `"make it an oil painting"` (instructional prompts may work less well)
 
+### Multi-Reference Generation
+
+Combine elements from multiple reference images:
+
+```bash
+./flux -d flux-klein-model -i car.png -i beach.png -p "a sports car on the beach" -o result.png
+```
+
+Each reference image is encoded separately and passed to the transformer with different positional embeddings (T=10, T=20, T=30, ...). The model attends to all references during generation, allowing it to combine elements from each.
+
+**Example:**
+- Reference 1: A red sports car
+- Reference 2: A tropical beach with palm trees
+- Prompt: "combine the two images"
+- Result: A red sports car on a tropical beach
+
+You can specify up to 16 reference images with multiple `-i` flags. The prompt guides how the references are combined.
+
 ### Command Line Options
 
 **Required:**
@@ -107,7 +125,7 @@ FLUX.2 uses **in-context conditioning** for image-to-image generation. Unlike tr
 
 **Image-to-image options:**
 ```
--i, --input PATH      Input image for img2img
+-i, --input PATH      Reference image (can be specified multiple times)
 ```
 
 **Output options:**

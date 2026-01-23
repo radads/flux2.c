@@ -211,8 +211,9 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "  -H, --height N        Output height (default: %d)\n", DEFAULT_HEIGHT);
     fprintf(stderr, "  -s, --steps N         Sampling steps (default: %d)\n", DEFAULT_STEPS);
     fprintf(stderr, "  -S, --seed N          Random seed (-1 for random)\n\n");
-    fprintf(stderr, "Image-to-image options:\n");
-    fprintf(stderr, "  -i, --input PATH      Input image for img2img (can specify multiple)\n\n");
+    fprintf(stderr, "Reference images (img2img / multi-reference):\n");
+    fprintf(stderr, "  -i, --input PATH      Reference image (can specify up to %d)\n", MAX_INPUT_IMAGES);
+    fprintf(stderr, "                        Multiple -i flags combine images via in-context conditioning\n\n");
     fprintf(stderr, "Output options:\n");
     fprintf(stderr, "  -q, --quiet           Silent mode, no output\n");
     fprintf(stderr, "  -v, --verbose         Detailed output\n");
@@ -226,6 +227,7 @@ static void print_usage(const char *prog) {
     fprintf(stderr, "Examples:\n");
     fprintf(stderr, "  %s -d model/ -p \"a cat on a rainbow\" -o cat.png\n", prog);
     fprintf(stderr, "  %s -d model/ -p \"oil painting\" -i photo.png -o art.png\n", prog);
+    fprintf(stderr, "  %s -d model/ -p \"combine them\" -i car.png -i beach.png -o result.png\n", prog);
 }
 
 /* ========================================================================
