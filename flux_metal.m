@@ -14,6 +14,7 @@
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
 #include "flux_metal.h"
+#include "flux_shaders_source.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2950,50 +2951,13 @@ int flux_metal_init_shaders(void) {
     @autoreleasepool {
         NSError *error = nil;
 
-        /* Try to find the shader file in various locations */
-        NSString *shaderPath = nil;
-        NSMutableArray *searchPaths = [NSMutableArray arrayWithObjects:
-            @"flux_shaders.metal",
-            @"./flux_shaders.metal",
-            @"flux2.c/flux_shaders.metal",
-            @"./flux2.c/flux_shaders.metal",
-            nil];
-        NSString *bundlePath = [[NSBundle mainBundle] pathForResource:@"flux_shaders" ofType:@"metal"];
-        if (bundlePath) {
-            [searchPaths addObject:bundlePath];
-        }
-
-        for (NSString *path in searchPaths) {
-            if (path && [[NSFileManager defaultManager] fileExistsAtPath:path]) {
-                shaderPath = path;
-                break;
-            }
-        }
-
-        if (!shaderPath) {
-            /* Try executable directory */
-            NSString *execPath = [[NSBundle mainBundle] executablePath];
-            if (execPath) {
-                NSString *execDir = [execPath stringByDeletingLastPathComponent];
-                NSString *path = [execDir stringByAppendingPathComponent:@"flux_shaders.metal"];
-                if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
-                    shaderPath = path;
-                }
-            }
-        }
-
-        if (!shaderPath) {
-            fprintf(stderr, "Metal shaders: flux_shaders.metal not found\n");
-            return 0;
-        }
-
-        /* Load shader source */
-        NSString *shaderSource = [NSString stringWithContentsOfFile:shaderPath
-                                                           encoding:NSUTF8StringEncoding
-                                                              error:&error];
+        /* Load shader source from embedded data */
+        NSString *shaderSource = [[NSString alloc]
+            initWithBytes:flux_shaders_metal
+            length:flux_shaders_metal_len
+            encoding:NSUTF8StringEncoding];
         if (!shaderSource) {
-            fprintf(stderr, "Metal shaders: failed to read %s: %s\n",
-                    [shaderPath UTF8String], [[error localizedDescription] UTF8String]);
+            fprintf(stderr, "Metal shaders: failed to decode embedded source\n");
             return 0;
         }
 

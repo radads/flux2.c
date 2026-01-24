@@ -89,7 +89,11 @@ mps-build: $(SRCS:.c=.mps.o) $(CLI_SRCS:.c=.mps.o) flux_metal.o main.mps.o
 %.mps.o: %.c flux.h flux_kernels.h
 	$(CC) $(MPS_CFLAGS) -c -o $@ $<
 
-flux_metal.o: flux_metal.m flux_metal.h
+# Embed Metal shader source as C array (runtime compilation, no Metal toolchain needed)
+flux_shaders_source.h: flux_shaders.metal
+	xxd -i $< > $@
+
+flux_metal.o: flux_metal.m flux_metal.h flux_shaders_source.h
 	$(CC) $(MPS_OBJCFLAGS) -c -o $@ $<
 
 else
@@ -150,6 +154,7 @@ install: $(TARGET) $(LIB)
 
 clean:
 	rm -f $(OBJS) $(CLI_OBJS) *.mps.o flux_metal.o main.o $(TARGET) $(LIB)
+	rm -f flux_shaders_source.h
 
 info:
 	@echo "Platform: $(UNAME_S) $(UNAME_M)"
